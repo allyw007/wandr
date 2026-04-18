@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 
+import { exportToPDF } from "@/app/components/ExportPDF";
 import type { ItineraryMapDay } from "@/app/components/ItineraryMap";
 
 const ItineraryMap = dynamic(() => import("@/app/components/ItineraryMap"), {
@@ -194,6 +195,12 @@ export default function HomePage() {
 
   const inspireCanSubmit =
     Boolean(destination.trim()) && selectedVibes.length > 0;
+
+  const vibeLabelForExport = VIBES.filter((v) =>
+    selectedVibes.includes(v.id)
+  )
+    .map((v) => v.title)
+    .join(" + ");
 
   const handleCurateTrip = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -724,7 +731,22 @@ export default function HomePage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => alert("Export coming soon!")}
+                    onClick={() => {
+                      try {
+                        exportToPDF(
+                          destination.trim(),
+                          vibeLabelForExport || "Your vibes",
+                          tripDuration,
+                          itinerary,
+                          itineraryPlaces ?? []
+                        );
+                      } catch (err) {
+                        console.error(err);
+                        alert(
+                          "Could not export PDF. Please try again."
+                        );
+                      }
+                    }}
                     style={{
                       padding: "12px 20px",
                       border: "none",
