@@ -1,7 +1,7 @@
 "use client";
 
 import { GoogleMap, useJsApiLoader } from "@react-google-maps/api";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type ItineraryMapStop = { name: string; address: string };
 
@@ -11,15 +11,22 @@ export type ItineraryMapDay = {
   stops: ItineraryMapStop[];
 };
 
-type GeocodedStop = {
+const LIBRARIES: ["marker"] = ["marker"];
+
+const DAY_COLORS: Record<number, string> = {
+  1: "#E8634A",
+  2: "#0B7A8C",
+  3: "#2AB5A0",
+};
+
+type FlatStop = {
   id: string;
   day: number;
   name: string;
-  lat: number;
-  lng: number;
+  address: string;
 };
 
-async function geocodeViaRest(
+async function geocodeWithFetch(
   address: string,
   apiKey: string
 ): Promise<{ lat: number; lng: number } | null> {
@@ -38,55 +45,26 @@ async function geocodeViaRest(
   return null;
 }
 
-function geocodeViaJsApi(
-  address: string
-): Promise<{ lat: number; lng: number } | null> {
-  return new Promise((resolve) => {
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ address }, (results, status) => {
-      if (status === "OK" && results?.[0]?.geometry?.location) {
-        const loc = results[0].geometry.location;
-        resolve({ lat: loc.lat(), lng: loc.lng() });
-      } else resolve(null);
-    });
-  });
-}
-
-async function geocodeAddress(
-  address: string,
-  apiKey: string
-): Promise<{ lat: number; lng: number } | null> {
-  try {
-    const fromRest = await geocodeViaRest(address, apiKey);
-    if (fromRest) return fromRest;
-  } catch {
-    // CORS, network, or non-OK HTTP — try JS Geocoder when available
-  }
-  if (typeof google !== "undefined" && google.maps) {
-    return geocodeViaJsApi(address);
-  }
-  return null;
-}
-
 type Props = {
   places: ItineraryMapDay[];
   googleMapsApiKey: string;
 };
 
-export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
-  /** null = still loading script or geocoding; array = done (may be empty) */
-  const [geocoded, setGeocoded] = useState<GeocodedStop[] | null>(null);
-  const [map, setMap] = useState<google.maps.Map | null>(null);
+export default function ItineraryMap(props: Props) {
+  const { places, googleMapsApiKey } = props;
+
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: props.googleMapsApiKey,
+    libraries: LIBRARIES,
+    version: "beta",
     id: "wandr-google-maps-script",
-    googleMapsApiKey: googleMapsApiKey || "__MISSING__",
-    libraries: ["places", "marker"],
   });
 
   const flatStops = useMemo(() => {
-    const out: { id: string; day: number; name: string; address: string }[] =
-      [];
+    const out: FlatStop[] = [];
     for (const dayBlock of places) {
       const dayNum = Number(dayBlock.day);
       if (!Number.isFinite(dayNum) || !Array.isArray(dayBlock.stops)) continue;
@@ -107,125 +85,128 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
     return out;
   }, [places]);
 
-  useEffect(() => {
-    if (!isLoaded || !googleMapsApiKey || flatStops.length === 0) return;
+  const onMapLoad = useCallback((map: google.maps.Map) => {
+    mapRef.current = map;
+    setMapReady(true);
+  }, []);
 
+  const onMapUnmount = useCallback(() => {
+    mapRef.current = null;
+    setMapReady(false);
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded || !mapReady || !mapRef.current || !googleMapsApiKey) {
+      return;
+    }
+    if (flatStops.length === 0) {
+      return;
+    }
+
+    const map = mapRef.current;
     let cancelled = false;
+    const markersRef: google.maps.marker.AdvancedMarkerElement[] = [];
+    const infoWindow = new google.maps.InfoWindow();
 
     void (async () => {
-      if (!cancelled) setGeocoded(null);
-      const results: GeocodedStop[] = [];
+      type Geocoded = {
+        lat: number;
+        lng: number;
+        day: number;
+        name: string;
+        theme: string;
+      };
+
+      const geocoded: Geocoded[] = [];
+
       for (const stop of flatStops) {
         if (cancelled) return;
-        const coords = await geocodeAddress(stop.address, googleMapsApiKey);
-        if (cancelled) return;
-        if (coords) {
-          results.push({
-            id: stop.id,
-            day: stop.day,
-            name: stop.name,
-            lat: coords.lat,
-            lng: coords.lng,
-          });
-        }
+        const coords = await geocodeWithFetch(stop.address, googleMapsApiKey);
+        if (cancelled || !coords) continue;
+
+        const theme =
+          places
+            .find((d) => Number(d.day) === stop.day)
+            ?.theme?.trim() ?? "";
+
+        geocoded.push({
+          lat: coords.lat,
+          lng: coords.lng,
+          day: stop.day,
+          name: stop.name,
+          theme,
+        });
       }
-      if (!cancelled) setGeocoded(results);
+
+      if (cancelled || geocoded.length === 0) return;
+
+      const bounds = new google.maps.LatLngBounds();
+      for (const item of geocoded) {
+        bounds.extend({ lat: item.lat, lng: item.lng });
+      }
+      map.fitBounds(bounds, { top: 48, right: 48, bottom: 48, left: 48 });
+
+      for (const item of geocoded) {
+        if (cancelled) return;
+
+        const pin = new window.google.maps.marker.PinElement({
+          background: DAY_COLORS[item.day] ?? "#2AB5A0",
+          borderColor: "#ffffff",
+          glyphColor: "#ffffff",
+        });
+
+        const marker = new window.google.maps.marker.AdvancedMarkerElement({
+          map,
+          position: { lat: item.lat, lng: item.lng },
+          title: item.name,
+          content: pin.element,
+        });
+
+        marker.addEventListener("gmp-click", () => {
+          const root = document.createElement("div");
+          root.style.padding = "8px";
+          root.style.minWidth = "140px";
+          root.style.color = "#102A43";
+          root.style.fontFamily = "Georgia, 'Times New Roman', serif";
+          root.style.fontSize = "14px";
+
+          const dayLine = document.createElement("div");
+          dayLine.style.fontWeight = "700";
+          dayLine.style.marginBottom = "6px";
+          dayLine.textContent = `Day ${item.day}`;
+          root.appendChild(dayLine);
+
+          if (item.theme) {
+            const themeLine = document.createElement("div");
+            themeLine.style.marginBottom = "6px";
+            themeLine.style.color = "#0B7A8C";
+            themeLine.textContent = item.theme;
+            root.appendChild(themeLine);
+          }
+
+          const nameLine = document.createElement("div");
+          nameLine.textContent = item.name;
+          root.appendChild(nameLine);
+
+          infoWindow.setContent(root);
+          infoWindow.open({ map, anchor: marker });
+        });
+
+        markersRef.push(marker);
+      }
     })();
 
     return () => {
       cancelled = true;
-    };
-  }, [isLoaded, flatStops, googleMapsApiKey]);
-
-  const center = useMemo(() => {
-    if (geocoded === null || geocoded.length === 0) return { lat: 0, lng: 0 };
-    let lat = 0;
-    let lng = 0;
-    for (const s of geocoded) {
-      lat += s.lat;
-      lng += s.lng;
-    }
-    return { lat: lat / geocoded.length, lng: lng / geocoded.length };
-  }, [geocoded]);
-
-  const onMapLoad = useCallback((m: google.maps.Map) => {
-    setMap(m);
-  }, []);
-
-  const onMapUnmount = useCallback(() => {
-    setMap(null);
-  }, []);
-
-  useEffect(() => {
-    if (!map || geocoded === null || geocoded.length === 0) return;
-
-    const infoWindow = new google.maps.InfoWindow();
-    const markers: google.maps.marker.AdvancedMarkerElement[] = [];
-
-    for (const stop of geocoded) {
-      const pin = new google.maps.marker.PinElement({
-        background:
-          stop.day === 1
-            ? "#E8634A"
-            : stop.day === 2
-              ? "#0B7A8C"
-              : "#2AB5A0",
-        borderColor: "#ffffff",
-        glyphColor: "#ffffff",
-      });
-
-      const marker = new google.maps.marker.AdvancedMarkerElement({
-        map,
-        position: { lat: stop.lat, lng: stop.lng },
-        title: stop.name,
-        content: pin.element,
-      });
-
-      const dayTheme =
-        places.find((d) => Number(d.day) === stop.day)?.theme?.trim() ?? "";
-
-      marker.addListener("click", () => {
-        const root = document.createElement("div");
-        root.style.padding = "8px";
-        root.style.minWidth = "140px";
-        root.style.color = "#102A43";
-        root.style.fontFamily = "Georgia, 'Times New Roman', serif";
-        root.style.fontSize = "14px";
-
-        const dayEl = document.createElement("div");
-        dayEl.style.fontWeight = "700";
-        dayEl.style.marginBottom = "6px";
-        dayEl.textContent = `Day ${stop.day}`;
-        root.appendChild(dayEl);
-
-        if (dayTheme) {
-          const themeEl = document.createElement("div");
-          themeEl.style.marginBottom = "6px";
-          themeEl.style.color = "#0B7A8C";
-          themeEl.textContent = dayTheme;
-          root.appendChild(themeEl);
-        }
-
-        const nameEl = document.createElement("div");
-        nameEl.textContent = stop.name;
-        root.appendChild(nameEl);
-
-        infoWindow.setContent(root);
-        infoWindow.open({ map, anchor: marker });
-      });
-
-      markers.push(marker);
-    }
-
-    return () => {
       infoWindow.close();
-      for (const m of markers) {
+      for (const m of markersRef) {
         m.map = null;
       }
+      markersRef.length = 0;
     };
-  }, [map, geocoded, places]);
+  }, [isLoaded, mapReady, flatStops, googleMapsApiKey, places]);
 
-  if (flatStops.length === 0 || !googleMapsApiKey) {
+  if (!googleMapsApiKey || flatStops.length === 0) {
     return null;
   }
 
@@ -244,12 +225,9 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
     );
   }
 
-  const showLoading = !isLoaded || geocoded === null;
-  const showMap = isLoaded && geocoded !== null && geocoded.length > 0;
-
   return (
     <div style={{ width: "100%" }}>
-      {showLoading && (
+      {!isLoaded && (
         <p
           style={{
             textAlign: "center",
@@ -264,17 +242,21 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
       <div
         style={{
           width: "100%",
-          height: 400,
+          height: 450,
           borderRadius: 12,
           overflow: "hidden",
-          background: showMap ? "#E8EEF2" : "rgba(255,255,255,0.06)",
+          background: isLoaded ? "#E8EEF2" : "rgba(255,255,255,0.06)",
         }}
       >
-        {showMap && (
+        {isLoaded && (
           <GoogleMap
-            mapContainerStyle={{ width: "100%", height: "100%" }}
-            center={center}
-            zoom={13}
+            mapContainerStyle={{
+              width: "100%",
+              height: "100%",
+              borderRadius: 12,
+            }}
+            center={{ lat: 20, lng: 0 }}
+            zoom={3}
             onLoad={onMapLoad}
             onUnmount={onMapUnmount}
             options={{
@@ -286,21 +268,6 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
           />
         )}
       </div>
-      {isLoaded &&
-        geocoded !== null &&
-        geocoded.length === 0 &&
-        flatStops.length > 0 && (
-          <p
-            style={{
-              color: "rgba(255,255,255,0.85)",
-              textAlign: "center",
-              marginTop: 12,
-              fontSize: 15,
-            }}
-          >
-            Could not plot stops on the map.
-          </p>
-        )}
     </div>
   );
 }
