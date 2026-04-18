@@ -61,10 +61,47 @@ function tryParseItineraryPayload(
   return null;
 }
 
-export async function POST(request: Request) {
-  const { destination, places } = await request.json();
+const TRIP_DURATIONS = [
+  "Weekend",
+  "3–4 Days",
+  "1 Week",
+  "2+ Weeks",
+] as const;
 
-  const userContent = `You are Wandr, a friendly travel curator. Create a 2-3 day itinerary for ${destination} based on: ${places}.
+type TripDuration = (typeof TRIP_DURATIONS)[number];
+
+function normalizeDuration(raw: unknown): TripDuration {
+  if (typeof raw !== "string") return "3–4 Days";
+  if ((TRIP_DURATIONS as readonly string[]).includes(raw)) {
+    return raw as TripDuration;
+  }
+  if (raw === "3-4 Days") return "3–4 Days";
+  return "3–4 Days";
+}
+
+function durationStructureGuidance(duration: TripDuration): string {
+  switch (duration) {
+    case "Weekend":
+      return `Structure the itinerary as exactly 2 days (Day 1 and Day 2). The places array must have 2 entries with day numbers 1 and 2.`;
+    case "3–4 Days":
+      return `Structure the itinerary as exactly 3 days. The places array must have 3 entries with day numbers 1, 2, and 3.`;
+    case "1 Week":
+      return `Structure the itinerary as exactly 6 days. The places array must have 6 entries with day numbers 1 through 6.`;
+    case "2+ Weeks":
+      return `This is a two-week trip: in the markdown, highlight key experiences across 14 days, grouped by region or theme with clear headings (not necessarily hour-by-hour for every moment). The places array should include 14 entries (day: 1 through day: 14), each with a theme aligned to that regional or thematic grouping, and stops with full geocodable addresses.`;
+    default:
+      return `Structure the itinerary as exactly 3 days. The places array must have 3 entries with day numbers 1, 2, and 3.`;
+  }
+}
+
+export async function POST(request: Request) {
+  const body = await request.json();
+  const { destination, places } = body;
+  const duration = normalizeDuration(body.duration);
+
+  const userContent = `You are Wandr, a friendly travel curator. Create a ${duration} itinerary for ${destination} based on: ${places}.
+
+${durationStructureGuidance(duration)}
 
 Return ONLY a JSON object with exactly two fields:
 1. markdown: the full itinerary as beautiful markdown with emoji day 

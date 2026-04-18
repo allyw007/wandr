@@ -137,10 +137,20 @@ const VIBES = [
   },
 ] as const;
 
+const TRIP_DURATIONS = [
+  "Weekend",
+  "3–4 Days",
+  "1 Week",
+  "2+ Weeks",
+] as const;
+
+type TripDuration = (typeof TRIP_DURATIONS)[number];
+
 export default function HomePage() {
   const [flow, setFlow] = useState<"saves" | "inspire" | null>(null);
   const [destination, setDestination] = useState("");
-  const [selectedVibeId, setSelectedVibeId] = useState<string | null>(null);
+  const [selectedVibes, setSelectedVibes] = useState<string[]>([]);
+  const [tripDuration, setTripDuration] = useState<TripDuration>("3–4 Days");
   const [itinerary, setItinerary] = useState("");
   const [itineraryPlaces, setItineraryPlaces] = useState<
     ItineraryMapDay[] | null
@@ -175,27 +185,33 @@ export default function HomePage() {
   const resetToStart = () => {
     setFlow(null);
     setDestination("");
-    setSelectedVibeId(null);
+    setSelectedVibes([]);
+    setTripDuration("3–4 Days");
     setItinerary("");
     setItineraryPlaces(null);
     setLoading(false);
   };
 
+  const inspireCanSubmit =
+    Boolean(destination.trim()) && selectedVibes.length > 0;
+
   const handleCurateTrip = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    const vibe = VIBES.find((v) => v.id === selectedVibeId);
-    if (!destination.trim() || !vibe) {
+    if (!destination.trim() || selectedVibes.length === 0) {
       setItineraryPlaces(null);
       setItinerary(
         !destination.trim()
           ? "Please enter where you’re headed."
-          : "Please choose a vibe to curate your trip."
+          : "Please select at least one vibe to curate your trip."
       );
       return;
     }
 
-    const places = `Theme: ${vibe.title}. Curate based on this theme only, no specific saved places.`;
+    const themeJoined = VIBES.filter((v) => selectedVibes.includes(v.id))
+      .map((v) => v.title)
+      .join(" + ");
+    const places = `Duration: ${tripDuration}. Theme: ${themeJoined}. Curate based on these themes only, no specific saved places.`;
 
     setLoading(true);
     setItinerary("");
@@ -205,7 +221,11 @@ export default function HomePage() {
       const response = await fetch("/api/itinerary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ destination: destination.trim(), places }),
+        body: JSON.stringify({
+          destination: destination.trim(),
+          duration: tripDuration,
+          places,
+        }),
       });
 
       if (!response.ok) throw new Error("Failed to build itinerary");
@@ -498,13 +518,62 @@ export default function HomePage() {
               <div>
                 <p
                   style={{
+                    margin: "0 0 10px",
+                    color: "rgba(255, 255, 255, 0.9)",
+                    fontSize: "17px",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  How long is your trip?
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "10px",
+                  }}
+                >
+                  {TRIP_DURATIONS.map((d) => {
+                    const selected = tripDuration === d;
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => setTripDuration(d)}
+                        style={{
+                          padding: "10px 16px",
+                          borderRadius: "999px",
+                          border: selected
+                            ? "1px solid #2AB5A0"
+                            : "1px solid rgba(255, 255, 255, 0.35)",
+                          backgroundColor: selected ? mint : "transparent",
+                          color: selected ? "#FFFFFF" : "rgba(255, 255, 255, 0.85)",
+                          fontSize: "14px",
+                          fontWeight: 600,
+                          letterSpacing: "0.02em",
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          transition:
+                            "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease",
+                        }}
+                      >
+                        {d}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <p
+                  style={{
                     margin: "0 0 14px",
                     color: "rgba(255, 255, 255, 0.72)",
                     fontSize: "15px",
                     textAlign: "center",
                   }}
                 >
-                  Pick your vibe
+                  Pick your vibe (select any that apply)
                 </p>
                 <div
                   style={{
@@ -514,12 +583,18 @@ export default function HomePage() {
                   }}
                 >
                   {VIBES.map((v) => {
-                    const selected = selectedVibeId === v.id;
+                    const selected = selectedVibes.includes(v.id);
                     return (
                       <button
                         key={v.id}
                         type="button"
-                        onClick={() => setSelectedVibeId(v.id)}
+                        onClick={() => {
+                          setSelectedVibes((prev) =>
+                            prev.includes(v.id)
+                              ? prev.filter((id) => id !== v.id)
+                              : [...prev, v.id]
+                          );
+                        }}
                         style={{
                           display: "flex",
                           flexDirection: "column",
@@ -532,7 +607,7 @@ export default function HomePage() {
                             : "1px solid rgba(42, 181, 160, 0.35)",
                           backgroundColor: selected
                             ? coral
-                            : "rgba(255,255,255,0.06)",
+                            : "rgba(13, 61, 86, 0.65)",
                           cursor: "pointer",
                           fontFamily: "inherit",
                           boxSizing: "border-box",
@@ -582,7 +657,7 @@ export default function HomePage() {
 
               <button
                 type="submit"
-                disabled={loading}
+                disabled={loading || !inspireCanSubmit}
                 style={{
                   width: "100%",
                   padding: "14px 20px",
@@ -593,10 +668,11 @@ export default function HomePage() {
                   fontSize: "15px",
                   fontWeight: 700,
                   letterSpacing: "0.04em",
-                  cursor: loading ? "not-allowed" : "pointer",
+                  cursor:
+                    loading || !inspireCanSubmit ? "not-allowed" : "pointer",
                   fontFamily: "inherit",
                   boxShadow: "0 8px 20px rgba(232, 99, 74, 0.35)",
-                  opacity: loading ? 0.88 : 1,
+                  opacity: loading || !inspireCanSubmit ? 0.55 : 1,
                 }}
               >
                 {loading ? "Curating your trip..." : "Curate my trip →"}

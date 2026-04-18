@@ -97,12 +97,14 @@ export default function ItineraryMap({
   }, []);
 
   useEffect(() => {
+    if (!places || places.length === 0) return;
     if (!googleMapsApiKey || flatStops.length === 0) return;
 
     const container = mapDivRef.current;
     if (!container) return;
 
-    let cancelled = false;
+    let isMounted = true;
+    let initScheduled = false;
     const markers: google.maps.marker.AdvancedMarkerElement[] = [];
 
     const scriptSrc = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
@@ -110,7 +112,7 @@ export default function ItineraryMap({
     )}&v=beta&libraries=marker`;
 
     const initAfterLoad = () => {
-      if (cancelled) return;
+      if (!isMounted) return;
       const el = mapDivRef.current;
       if (!el) return;
 
@@ -123,6 +125,7 @@ export default function ItineraryMap({
         mapId: "DEMO_MAP_ID",
       });
 
+      if (!isMounted) return;
       setMapUiReady(true);
 
       void (async () => {
@@ -136,12 +139,12 @@ export default function ItineraryMap({
         const geocoded: Geocoded[] = [];
 
         for (const stop of flatStops) {
-          if (cancelled) return;
+          if (!isMounted) return;
           const result = await geocodeWithFetch(
             stop.address,
             googleMapsApiKey
           );
-          if (cancelled || !result) continue;
+          if (!isMounted || !result) continue;
           geocoded.push({
             lat: result.lat,
             lng: result.lng,
@@ -150,12 +153,12 @@ export default function ItineraryMap({
           });
         }
 
-        if (cancelled || geocoded.length === 0) return;
+        if (!isMounted || geocoded.length === 0) return;
 
         const bounds = new window.google.maps.LatLngBounds();
 
         for (const item of geocoded) {
-          if (cancelled) return;
+          if (!isMounted) return;
 
           const color = DAY_COLORS[item.day] ?? "#2AB5A0";
           const pin = new window.google.maps.marker.PinElement({
@@ -175,62 +178,62 @@ export default function ItineraryMap({
           bounds.extend({ lat: item.lat, lng: item.lng });
         }
 
-        map.fitBounds(bounds, { top: 48, right: 48, bottom: 48, left: 48 });
+        if (isMounted) {
+          map.fitBounds(bounds, { top: 48, right: 48, bottom: 48, left: 48 });
+        }
       })();
     };
 
     const scheduleInit = () => {
       queueMicrotask(() => {
-        if (!cancelled) initAfterLoad();
+        if (!isMounted || !mapsApiReady() || initScheduled) return;
+        initScheduled = true;
+        initAfterLoad();
       });
     };
 
-    if (mapsApiReady()) {
-      scheduleInit();
-    } else {
-      const scripts = document.querySelectorAll<HTMLScriptElement>(
-        "script[src]"
-      );
-      let existing: HTMLScriptElement | null = null;
-      for (const s of scripts) {
-        if (s.src === scriptSrc) {
-          existing = s;
-          break;
-        }
+    const beginMapLoad = () => {
+      if (!isMounted) return;
+
+      if (mapsApiReady()) {
+        scheduleInit();
+        return;
       }
 
-      if (existing) {
-        existing.addEventListener(
-          "load",
-          () => {
-            if (!cancelled) scheduleInit();
-          },
-          { once: true }
-        );
-        if (mapsApiReady()) {
-          scheduleInit();
-        }
-      } else {
-        const script = document.createElement("script");
-        script.src = scriptSrc;
-        script.async = true;
-        script.onload = () => {
-          if (!cancelled) scheduleInit();
+      const existingScript = document.querySelector<HTMLScriptElement>(
+        'script[src*="maps.googleapis.com"]'
+      );
+
+      if (existingScript) {
+        const onReady = () => {
+          if (isMounted && mapsApiReady()) scheduleInit();
         };
-        document.head.appendChild(script);
-        scriptWeAddedRef.current = script;
+        existingScript.addEventListener("load", onReady, { once: true });
+        queueMicrotask(onReady);
+        return;
       }
-    }
+
+      const script = document.createElement("script");
+      script.src = scriptSrc;
+      script.async = true;
+      script.onload = () => {
+        if (isMounted && mapsApiReady()) scheduleInit();
+      };
+      document.head.appendChild(script);
+      scriptWeAddedRef.current = script;
+    };
+
+    beginMapLoad();
 
     return () => {
-      cancelled = true;
+      isMounted = false;
       for (const m of markers) {
         m.map = null;
       }
       markers.length = 0;
       container.replaceChildren();
     };
-  }, [flatStops, googleMapsApiKey]);
+  }, [flatStops, googleMapsApiKey, places]);
 
   if (!googleMapsApiKey || flatStops.length === 0) {
     return null;
