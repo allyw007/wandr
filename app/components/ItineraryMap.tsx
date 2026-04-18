@@ -1,12 +1,7 @@
 "use client";
 
-import {
-  GoogleMap,
-  InfoWindow,
-  Marker,
-  useJsApiLoader,
-} from "@react-google-maps/api";
-import { useEffect, useMemo, useState } from "react";
+import { GoogleMap, useJsApiLoader } from "@react-google-maps/api";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type ItineraryMapStop = { name: string; address: string };
 
@@ -23,16 +18,6 @@ type GeocodedStop = {
   lat: number;
   lng: number;
 };
-
-const DAY_COLORS: Record<number, string> = {
-  1: "#E8634A",
-  2: "#0B7A8C",
-  3: "#2AB5A0",
-};
-
-function colorForDay(day: number): string {
-  return DAY_COLORS[day] ?? "#2AB5A0";
-}
 
 async function geocodeViaRest(
   address: string,
@@ -91,11 +76,12 @@ type Props = {
 export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
   /** null = still loading script or geocoding; array = done (may be empty) */
   const [geocoded, setGeocoded] = useState<GeocodedStop[] | null>(null);
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [map, setMap] = useState<google.maps.Map | null>(null);
 
   const { isLoaded, loadError } = useJsApiLoader({
     id: "wandr-google-maps-script",
     googleMapsApiKey: googleMapsApiKey || "__MISSING__",
+    libraries: ["places", "marker"],
   });
 
   const flatStops = useMemo(() => {
@@ -162,6 +148,83 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
     return { lat: lat / geocoded.length, lng: lng / geocoded.length };
   }, [geocoded]);
 
+  const onMapLoad = useCallback((m: google.maps.Map) => {
+    setMap(m);
+  }, []);
+
+  const onMapUnmount = useCallback(() => {
+    setMap(null);
+  }, []);
+
+  useEffect(() => {
+    if (!map || geocoded === null || geocoded.length === 0) return;
+
+    const infoWindow = new google.maps.InfoWindow();
+    const markers: google.maps.marker.AdvancedMarkerElement[] = [];
+
+    for (const stop of geocoded) {
+      const pin = new google.maps.marker.PinElement({
+        background:
+          stop.day === 1
+            ? "#E8634A"
+            : stop.day === 2
+              ? "#0B7A8C"
+              : "#2AB5A0",
+        borderColor: "#ffffff",
+        glyphColor: "#ffffff",
+      });
+
+      const marker = new google.maps.marker.AdvancedMarkerElement({
+        map,
+        position: { lat: stop.lat, lng: stop.lng },
+        title: stop.name,
+        content: pin.element,
+      });
+
+      const dayTheme =
+        places.find((d) => Number(d.day) === stop.day)?.theme?.trim() ?? "";
+
+      marker.addListener("click", () => {
+        const root = document.createElement("div");
+        root.style.padding = "8px";
+        root.style.minWidth = "140px";
+        root.style.color = "#102A43";
+        root.style.fontFamily = "Georgia, 'Times New Roman', serif";
+        root.style.fontSize = "14px";
+
+        const dayEl = document.createElement("div");
+        dayEl.style.fontWeight = "700";
+        dayEl.style.marginBottom = "6px";
+        dayEl.textContent = `Day ${stop.day}`;
+        root.appendChild(dayEl);
+
+        if (dayTheme) {
+          const themeEl = document.createElement("div");
+          themeEl.style.marginBottom = "6px";
+          themeEl.style.color = "#0B7A8C";
+          themeEl.textContent = dayTheme;
+          root.appendChild(themeEl);
+        }
+
+        const nameEl = document.createElement("div");
+        nameEl.textContent = stop.name;
+        root.appendChild(nameEl);
+
+        infoWindow.setContent(root);
+        infoWindow.open({ map, anchor: marker });
+      });
+
+      markers.push(marker);
+    }
+
+    return () => {
+      infoWindow.close();
+      for (const m of markers) {
+        m.map = null;
+      }
+    };
+  }, [map, geocoded, places]);
+
   if (flatStops.length === 0 || !googleMapsApiKey) {
     return null;
   }
@@ -212,48 +275,15 @@ export default function ItineraryMap({ places, googleMapsApiKey }: Props) {
             mapContainerStyle={{ width: "100%", height: "100%" }}
             center={center}
             zoom={13}
+            onLoad={onMapLoad}
+            onUnmount={onMapUnmount}
             options={{
+              mapId: "DEMO_MAP_ID",
               streetViewControl: false,
               mapTypeControl: false,
               fullscreenControl: true,
             }}
-          >
-            {geocoded.map((stop) => (
-              <Marker
-                key={stop.id}
-                position={{ lat: stop.lat, lng: stop.lng }}
-                onClick={() => setActiveId(stop.id)}
-                icon={{
-                  path: google.maps.SymbolPath.CIRCLE,
-                  scale: 10,
-                  fillColor: colorForDay(stop.day),
-                  fillOpacity: 1,
-                  strokeColor: "#ffffff",
-                  strokeWeight: 2,
-                }}
-              >
-                {activeId === stop.id && (
-                  <InfoWindow onCloseClick={() => setActiveId(null)}>
-                    <div
-                      style={{
-                        padding: 4,
-                        minWidth: 120,
-                        color: "#102A43",
-                        fontFamily:
-                          "Georgia, 'Times New Roman', Times, serif",
-                        fontSize: 14,
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        Day {stop.day}
-                      </div>
-                      <div>{stop.name}</div>
-                    </div>
-                  </InfoWindow>
-                )}
-              </Marker>
-            ))}
-          </GoogleMap>
+          />
         )}
       </div>
       {isLoaded &&
