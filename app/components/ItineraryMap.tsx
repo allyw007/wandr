@@ -1,7 +1,6 @@
 "use client";
 
-import { GoogleMap, useJsApiLoader } from "@react-google-maps/api";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type ItineraryMapStop = { name: string; address: string };
 
@@ -10,8 +9,6 @@ export type ItineraryMapDay = {
   theme?: string;
   stops: ItineraryMapStop[];
 };
-
-const LIBRARIES: ["marker"] = ["marker"];
 
 const DAY_COLORS: Record<number, string> = {
   1: "#E8634A",
@@ -50,18 +47,22 @@ type Props = {
   googleMapsApiKey: string;
 };
 
-export default function ItineraryMap(props: Props) {
-  const { places, googleMapsApiKey } = props;
+function mapsApiReady(): boolean {
+  return Boolean(
+    typeof window !== "undefined" &&
+      window.google?.maps?.Map &&
+      window.google?.maps?.marker?.PinElement &&
+      window.google?.maps?.marker?.AdvancedMarkerElement
+  );
+}
 
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const [mapReady, setMapReady] = useState(false);
-
-  const { isLoaded, loadError } = useJsApiLoader({
-    googleMapsApiKey: props.googleMapsApiKey,
-    libraries: LIBRARIES,
-    version: "beta",
-    id: "wandr-google-maps-script",
-  });
+export default function ItineraryMap({
+  places,
+  googleMapsApiKey,
+}: Props) {
+  const mapDivRef = useRef<HTMLDivElement | null>(null);
+  const scriptWeAddedRef = useRef<HTMLScriptElement | null>(null);
+  const [mapUiReady, setMapUiReady] = useState(false);
 
   const flatStops = useMemo(() => {
     const out: FlatStop[] = [];
@@ -85,149 +86,159 @@ export default function ItineraryMap(props: Props) {
     return out;
   }, [places]);
 
-  const onMapLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
-    setMapReady(true);
-  }, []);
-
-  const onMapUnmount = useCallback(() => {
-    mapRef.current = null;
-    setMapReady(false);
+  useEffect(() => {
+    return () => {
+      const script = scriptWeAddedRef.current;
+      if (script?.parentNode) {
+        script.remove();
+      }
+      scriptWeAddedRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
-    if (!isLoaded || !mapReady || !mapRef.current || !googleMapsApiKey) {
-      return;
-    }
-    if (flatStops.length === 0) {
-      return;
-    }
+    if (!googleMapsApiKey || flatStops.length === 0) return;
 
-    const map = mapRef.current;
+    const container = mapDivRef.current;
+    if (!container) return;
+
     let cancelled = false;
-    const markersRef: google.maps.marker.AdvancedMarkerElement[] = [];
-    const infoWindow = new google.maps.InfoWindow();
+    const markers: google.maps.marker.AdvancedMarkerElement[] = [];
 
-    void (async () => {
-      type Geocoded = {
-        lat: number;
-        lng: number;
-        day: number;
-        name: string;
-        theme: string;
-      };
+    const scriptSrc = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
+      googleMapsApiKey
+    )}&v=beta&libraries=marker`;
 
-      const geocoded: Geocoded[] = [];
+    const initAfterLoad = () => {
+      if (cancelled) return;
+      const el = mapDivRef.current;
+      if (!el) return;
 
-      for (const stop of flatStops) {
-        if (cancelled) return;
-        const coords = await geocodeWithFetch(stop.address, googleMapsApiKey);
-        if (cancelled || !coords) continue;
+      setMapUiReady(false);
+      el.replaceChildren();
 
-        const theme =
-          places
-            .find((d) => Number(d.day) === stop.day)
-            ?.theme?.trim() ?? "";
+      const map = new window.google.maps.Map(el, {
+        zoom: 12,
+        center: { lat: 0, lng: 0 },
+        mapId: "DEMO_MAP_ID",
+      });
 
-        geocoded.push({
-          lat: coords.lat,
-          lng: coords.lng,
-          day: stop.day,
-          name: stop.name,
-          theme,
-        });
+      setMapUiReady(true);
+
+      void (async () => {
+        type Geocoded = {
+          lat: number;
+          lng: number;
+          day: number;
+          name: string;
+        };
+
+        const geocoded: Geocoded[] = [];
+
+        for (const stop of flatStops) {
+          if (cancelled) return;
+          const result = await geocodeWithFetch(
+            stop.address,
+            googleMapsApiKey
+          );
+          if (cancelled || !result) continue;
+          geocoded.push({
+            lat: result.lat,
+            lng: result.lng,
+            day: stop.day,
+            name: stop.name,
+          });
+        }
+
+        if (cancelled || geocoded.length === 0) return;
+
+        const bounds = new window.google.maps.LatLngBounds();
+
+        for (const item of geocoded) {
+          if (cancelled) return;
+
+          const color = DAY_COLORS[item.day] ?? "#2AB5A0";
+          const pin = new window.google.maps.marker.PinElement({
+            background: color,
+            borderColor: "#ffffff",
+            glyphColor: "#ffffff",
+          });
+
+          const marker = new window.google.maps.marker.AdvancedMarkerElement({
+            map,
+            position: { lat: item.lat, lng: item.lng },
+            title: item.name,
+            content: pin.element,
+          });
+
+          markers.push(marker);
+          bounds.extend({ lat: item.lat, lng: item.lng });
+        }
+
+        map.fitBounds(bounds, { top: 48, right: 48, bottom: 48, left: 48 });
+      })();
+    };
+
+    const scheduleInit = () => {
+      queueMicrotask(() => {
+        if (!cancelled) initAfterLoad();
+      });
+    };
+
+    if (mapsApiReady()) {
+      scheduleInit();
+    } else {
+      const scripts = document.querySelectorAll<HTMLScriptElement>(
+        "script[src]"
+      );
+      let existing: HTMLScriptElement | null = null;
+      for (const s of scripts) {
+        if (s.src === scriptSrc) {
+          existing = s;
+          break;
+        }
       }
 
-      if (cancelled || geocoded.length === 0) return;
-
-      const bounds = new google.maps.LatLngBounds();
-      for (const item of geocoded) {
-        bounds.extend({ lat: item.lat, lng: item.lng });
+      if (existing) {
+        existing.addEventListener(
+          "load",
+          () => {
+            if (!cancelled) scheduleInit();
+          },
+          { once: true }
+        );
+        if (mapsApiReady()) {
+          scheduleInit();
+        }
+      } else {
+        const script = document.createElement("script");
+        script.src = scriptSrc;
+        script.async = true;
+        script.onload = () => {
+          if (!cancelled) scheduleInit();
+        };
+        document.head.appendChild(script);
+        scriptWeAddedRef.current = script;
       }
-      map.fitBounds(bounds, { top: 48, right: 48, bottom: 48, left: 48 });
-
-      for (const item of geocoded) {
-        if (cancelled) return;
-
-        const pin = new window.google.maps.marker.PinElement({
-          background: DAY_COLORS[item.day] ?? "#2AB5A0",
-          borderColor: "#ffffff",
-          glyphColor: "#ffffff",
-        });
-
-        const marker = new window.google.maps.marker.AdvancedMarkerElement({
-          map,
-          position: { lat: item.lat, lng: item.lng },
-          title: item.name,
-          content: pin.element,
-        });
-
-        marker.addEventListener("gmp-click", () => {
-          const root = document.createElement("div");
-          root.style.padding = "8px";
-          root.style.minWidth = "140px";
-          root.style.color = "#102A43";
-          root.style.fontFamily = "Georgia, 'Times New Roman', serif";
-          root.style.fontSize = "14px";
-
-          const dayLine = document.createElement("div");
-          dayLine.style.fontWeight = "700";
-          dayLine.style.marginBottom = "6px";
-          dayLine.textContent = `Day ${item.day}`;
-          root.appendChild(dayLine);
-
-          if (item.theme) {
-            const themeLine = document.createElement("div");
-            themeLine.style.marginBottom = "6px";
-            themeLine.style.color = "#0B7A8C";
-            themeLine.textContent = item.theme;
-            root.appendChild(themeLine);
-          }
-
-          const nameLine = document.createElement("div");
-          nameLine.textContent = item.name;
-          root.appendChild(nameLine);
-
-          infoWindow.setContent(root);
-          infoWindow.open({ map, anchor: marker });
-        });
-
-        markersRef.push(marker);
-      }
-    })();
+    }
 
     return () => {
       cancelled = true;
-      infoWindow.close();
-      for (const m of markersRef) {
+      for (const m of markers) {
         m.map = null;
       }
-      markersRef.length = 0;
+      markers.length = 0;
+      container.replaceChildren();
     };
-  }, [isLoaded, mapReady, flatStops, googleMapsApiKey, places]);
+  }, [flatStops, googleMapsApiKey]);
 
   if (!googleMapsApiKey || flatStops.length === 0) {
     return null;
   }
 
-  if (loadError) {
-    return (
-      <div
-        style={{
-          padding: 16,
-          color: "#1A2E38",
-          background: "#F6FBFF",
-          borderRadius: 12,
-        }}
-      >
-        Could not load Google Maps.
-      </div>
-    );
-  }
-
   return (
     <div style={{ width: "100%" }}>
-      {!isLoaded && (
+      {!mapUiReady && (
         <p
           style={{
             textAlign: "center",
@@ -240,34 +251,15 @@ export default function ItineraryMap(props: Props) {
         </p>
       )}
       <div
+        ref={mapDivRef}
         style={{
           width: "100%",
           height: 450,
           borderRadius: 12,
           overflow: "hidden",
-          background: isLoaded ? "#E8EEF2" : "rgba(255,255,255,0.06)",
+          background: mapUiReady ? "#E8EEF2" : "rgba(255,255,255,0.06)",
         }}
-      >
-        {isLoaded && (
-          <GoogleMap
-            mapContainerStyle={{
-              width: "100%",
-              height: "100%",
-              borderRadius: 12,
-            }}
-            center={{ lat: 20, lng: 0 }}
-            zoom={3}
-            onLoad={onMapLoad}
-            onUnmount={onMapUnmount}
-            options={{
-              mapId: "DEMO_MAP_ID",
-              streetViewControl: false,
-              mapTypeControl: false,
-              fullscreenControl: true,
-            }}
-          />
-        )}
-      </div>
+      />
     </div>
   );
 }
