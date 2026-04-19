@@ -157,6 +157,9 @@ export default function HomePage() {
     ItineraryMapDay[] | null
   >(null);
   const [loading, setLoading] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackEmoji, setFeedbackEmoji] = useState<string | null>(null);
+  const [feedbackComment, setFeedbackComment] = useState("");
 
   const googleMapsApiKey =
     process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
@@ -780,6 +783,227 @@ export default function HomePage() {
           </section>
         )}
       </div>
+
+      <button
+        type="button"
+        onClick={() => setFeedbackOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={feedbackOpen}
+        style={{
+          position: "fixed",
+          bottom: "24px",
+          right: "24px",
+          zIndex: 1000,
+          padding: "12px 20px",
+          border: "none",
+          borderRadius: "50px",
+          backgroundColor: "#E8634A",
+          color: "#FFFFFF",
+          fontSize: "15px",
+          fontWeight: 700,
+          letterSpacing: "0.02em",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          boxShadow:
+            "0 10px 28px rgba(0, 0, 0, 0.35), 0 4px 12px rgba(232, 99, 74, 0.4)",
+        }}
+      >
+        💬 Feedback
+      </button>
+
+      {feedbackOpen && (
+        <div
+          role="presentation"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1100,
+            backgroundColor: "rgba(0, 0, 0, 0.6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            boxSizing: "border-box",
+          }}
+          onClick={() => setFeedbackOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="feedback-modal-title"
+            aria-describedby="feedback-modal-subtitle"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: "400px",
+              borderRadius: "16px",
+              padding: "32px",
+              backgroundColor: "#0D3D56",
+              border: "1px solid rgba(42, 181, 160, 0.3)",
+              boxShadow: "0 24px 48px rgba(0, 0, 0, 0.45)",
+              boxSizing: "border-box",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: "12px",
+                marginBottom: "20px",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <p
+                  id="feedback-modal-title"
+                  style={{
+                    margin: "0 0 8px",
+                    color: "#FFFFFF",
+                    fontSize: "20px",
+                    fontWeight: 600,
+                    lineHeight: 1.35,
+                    fontFamily: "Georgia, 'Times New Roman', Times, serif",
+                  }}
+                >
+                  How was your experience?
+                </p>
+                <p
+                  id="feedback-modal-subtitle"
+                  style={{
+                    margin: 0,
+                    color: "rgba(42, 181, 160, 0.85)",
+                    fontSize: "14px",
+                    lineHeight: 1.5,
+                    fontFamily: "Georgia, 'Times New Roman', Times, serif",
+                  }}
+                >
+                  Your feedback shapes what we build next
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFeedbackOpen(false)}
+                aria-label="Close feedback"
+                style={{
+                  flexShrink: 0,
+                  width: "32px",
+                  height: "32px",
+                  border: "none",
+                  borderRadius: "8px",
+                  backgroundColor: "rgba(255, 255, 255, 0.1)",
+                  color: "rgba(255, 255, 255, 0.85)",
+                  fontSize: "18px",
+                  lineHeight: 1,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: "12px",
+                justifyContent: "center",
+                marginBottom: "22px",
+              }}
+            >
+              {(["😍", "🤔", "😕"] as const).map((emoji) => {
+                const selected = feedbackEmoji === emoji;
+                return (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() =>
+                      setFeedbackEmoji(selected ? null : emoji)
+                    }
+                    aria-pressed={selected}
+                    aria-label={`Reaction ${emoji}`}
+                    style={{
+                      width: "64px",
+                      height: "64px",
+                      borderRadius: "14px",
+                      border: selected
+                        ? "2px solid #2AB5A0"
+                        : "1px solid rgba(42, 181, 160, 0.3)",
+                      backgroundColor: selected
+                        ? "rgba(42, 181, 160, 0.2)"
+                        : "rgba(13, 61, 86, 0.65)",
+                      fontSize: "34px",
+                      lineHeight: 1,
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    {emoji}
+                  </button>
+                );
+              })}
+            </div>
+
+            <label
+              htmlFor="feedback-comment"
+              style={{
+                display: "block",
+                marginBottom: "8px",
+                color: "rgba(255, 255, 255, 0.75)",
+                fontSize: "14px",
+              }}
+            >
+              Comments (optional)
+            </label>
+            <textarea
+              id="feedback-comment"
+              value={feedbackComment}
+              onChange={(e) => setFeedbackComment(e.target.value)}
+              rows={4}
+              placeholder="Tell us more…"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                marginBottom: "18px",
+                padding: "12px 14px",
+                borderRadius: "10px",
+                border: "1px solid rgba(42, 181, 160, 0.35)",
+                backgroundColor: "rgba(13, 61, 86, 0.85)",
+                color: "#FFFFFF",
+                fontSize: "15px",
+                fontFamily: "inherit",
+                lineHeight: 1.5,
+                resize: "vertical",
+              }}
+            />
+
+            <button
+              type="button"
+              onClick={() => {
+                alert("Thanks for your feedback!");
+                setFeedbackOpen(false);
+                setFeedbackEmoji(null);
+                setFeedbackComment("");
+              }}
+              style={{
+                width: "100%",
+                padding: "12px 20px",
+                border: "none",
+                borderRadius: "10px",
+                backgroundColor: "#E8634A",
+                color: "#FFFFFF",
+                fontSize: "15px",
+                fontWeight: 700,
+                letterSpacing: "0.02em",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                boxShadow: "0 6px 16px rgba(232, 99, 74, 0.35)",
+              }}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
